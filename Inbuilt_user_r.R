@@ -1,0 +1,5 @@
+x=scan()
+print(mean(x))
+print(sum(x))
+y=scan()
+print(abs(y))
