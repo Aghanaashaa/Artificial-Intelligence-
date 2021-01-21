@@ -1,0 +1,36 @@
+def compare_classification_models(input_dataset, parameters, var):
+    # Parameters
+    # 1. Model Path list
+    # 2. No. of random samples
+    # 3. Target Variable
+
+    from ath.utilities.data_object_utils import validate_and_load_data_object_file
+    from ath.utilities.compare_models_utils import compare_multiple_classification_models
+    import re
+    import os
+
+    target_column = parameters["target_variable"]
+    X_test = input_dataset.drop(target_column, axis='columns')
+    Y_test = input_dataset[target_column]
+
+    # Number of random samples to be shwon in the output. Default: 25
+    sample_size = parameters.get("num_random_samples",25)
+
+    model_paths = parameters['dataObjectPaths']
+    if isinstance(model_paths, str):
+        model_paths = list(model_paths.split(","))
+
+    model_paths = [model_path.strip() for model_path in model_paths]
+
+    model_dict_list = []
+    for model_path in model_paths:
+        model_dict = validate_and_load_data_object_file(model_path)
+
+        match = re.search(f"{var['dataObjectPrefix']}(.+?).model", os.path.basename(model_path))
+        model_dict["model_user_name"] = match.group(1) if match else ""
+
+        model_dict_list.append(model_dict)
+
+    model_output = compare_multiple_classification_models(X_test,Y_test,sample_size,var["outputFileDirectory"],model_dict_list)
+
+    return model_output

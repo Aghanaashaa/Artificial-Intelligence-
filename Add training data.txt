@@ -1,0 +1,18 @@
+def add_training_data_to_object_file(input_dataset, parameters, var):
+    # Appends the input_dataset as training data into the data object file passed as parameter
+    # NOTE:
+    # 1. Training data should be without the target variable
+    # 2. The original data object file in the execution directory gets updated with  the training data
+    # and not the file copied to staging area (hence use_data_object flag should be false)
+
+    import pandas as pd
+    from ath.utilities.data_object_utils import update_data_object_file
+
+    # Parameters
+    # 1. Model file Path
+    update_data_object_file(parameters["dataObjectPath"], key="X_train", value=input_dataset)
+
+    result = pd.DataFrame([f"Training data added to the model file"], columns= ["Result"])
+    return result
+
+

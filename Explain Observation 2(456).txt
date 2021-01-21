@@ -1,0 +1,162 @@
+def lime_explain_observation(input_dataset, parameters, var):
+    # References:
+    # LIME documentation: https://lime-ml.readthedocs.io/en/latest/lime.html
+
+    # Parameters
+    # 1. Observation
+    # 2. Model Path
+    # 3. Target Variable
+
+    import pandas as pd
+    import os
+    import matplotlib.pyplot as plt
+    import re
+    from lime.lime_tabular import LimeTabularExplainer
+    from ath.utilities.render_table_as_image_on_condition import render_table_as_image_on_condition
+    from ath.utilities.data_object_utils import validate_and_load_data_object_file
+    import numpy as np
+
+    # initialize parameters with default values
+    # discretize_continuous - if True, all non-categorical features will be discretized into quartiles
+    discretize_continuous_value = False if parameters.get('discretize_continuous', 'True') == 'False' else True
+    # discretizer - quartile  (non-categorical feature discretized to 4 buckets), decile, entropy
+    discretizer_type = parameters.get("discretizer", 'quartile')
+    # feature selection method. Can be 'forward_selection', 'highest_weights', 'lasso_path', 'none' or 'auto'
+    feature_selection = parameters.get("feature_selection", 'auto')
+    #  Place holder,  not supported  through UI for now
+    categorical_features_value = parameters.get("categorical_features", None)
+    if categorical_features_value:
+        categorical_features_value = [list(input_dataset.columns).index(categorical_col) for categorical_col in
+
+                                      categorical_features_value]
+    # maximum number of features present in explanation
+    num_features_value = parameters.get("num_features", 10)
+    # size of the neighborhood to learn the linear model
+    num_samples_value = parameters.get("num_samples", 5000)
+    #  Place holder, not supported through UI for now
+    distance_metric_value = parameters.get("distance_metric", 'euclidean')
+    #  Place holder, not supported through UI for now
+    model_regressor_value = parameters.get("model_regressor", None)
+    target_variable = parameters.get('target_variable')
+    kernel_width = parameters.get('kernel_width', 1)
+
+    #  Width of png created for feature-value table. Taken as input to manage longer column names.
+    lime_feature_graph_width = parameters.get("lime_feature_graph_width", 3)
+
+    # Load the model file
+    model_path = parameters["dataObjectPath"]
+    model_dict = validate_and_load_data_object_file(model_path)
+
+    model_type = model_dict.get("model_type", None)
+    model = model_dict.get("model")
+    model_name = model_dict.get("model_name", "Not Available")
+
+    match = re.search(f"{var['dataObjectPrefix']}(.+?).model", os.path.basename(model_path))
+    model_user_name = match.group(1) if match else ""
+
+    if model_type is None or model_type not in ("sklearn_classification", "sklearn_regression"):
+        raise Exception(
+            f"Model type not supported!! Currently only sklearn models are supported. Model:{model_user_name}, model type:{model_type}")
+
+    if "X_train" not in model_dict:
+        raise Exception(f"Training data not found in model file.")
+
+    X_train = model_dict.get("X_train")
+    if target_variable in X_train.columns:
+        X_train = X_train.drop(target_variable, axis='columns')
+
+    X_test = input_dataset.drop(target_variable, axis='columns')
+
+    if model_type == "sklearn_classification":
+        predict_fn = lambda x: model.predict_proba(x).astype(float)
+        model_type = "classification"
+    else:
+        predict_fn = model.predict
+        model_type = "regression"
+
+    # storing a new observation (row number entered by user will start from 1)
+    observation = parameters["observation"]
+    row_index = observation - 1
+    X_observation = X_test.iloc[[row_index], :]
+
+    # Special handling for XGBoost: Model saves the feature names as f0,f1, f2.
+    # Observation needs to be passed with the same feature names and in the same order as in the model.
+    if (model_name == 'XGBoost'):
+        X_observation = X_observation[X_train.columns]
+        X_observation.columns = model.get_booster().feature_names
+
+    # create the LIME explainer
+    # To force repeatability of explanations for same parameters. https://github.com/marcotcr/lime/issues/67
+    np.random.seed(16)
+    lime_explainer = LimeTabularExplainer(X_train.values, mode=model_type, feature_names=X_train.columns,
+                                          discretize_continuous=discretize_continuous_value,
+                                          discretizer=discretizer_type, categorical_features=categorical_features_value,
+                                          feature_selection=feature_selection,
+                                          class_names=model.classes_ if model_type == "classification" else [
+                                              target_variable])
+    # LIME explanation using the model
+    lime_explanation = lime_explainer.explain_instance(X_observation.values[0], predict_fn,
+                                                       num_features=num_features_value, num_samples=num_samples_value,
+                                                       distance_metric=distance_metric_value,
+                                                       model_regressor=model_regressor_value)
+
+    if model_type == "sklearn_classification":
+        ### Lime feature-value-importance table
+        label = lime_explanation.available_labels()
+        feature_tuple_list = lime_explanation.local_exp[label[0]]
+    else:
+        ### Line 463-464, in case of regression, index 1 in local_exp consists of actual explanation values and index 0 has negative https://github.com/marcotcr/lime/blob/master/lime/lime_tabular.py
+        feature_tuple_list = lime_explanation.local_exp[1]
+
+    domainmapper = lime_explanation.domain_mapper
+    weights = [0] * len(domainmapper.feature_names)
+    for x in feature_tuple_list:
+        weights[x[0]] = x[1]
+    feat_value_list = list(zip(domainmapper.exp_feature_names, domainmapper.feature_values, weights))
+    feat_value_df = pd.DataFrame(feat_value_list, columns=['Feature', 'Value', 'Weight'])
+    feat_value_df = feat_value_df[feat_value_df['Weight'] != 0.0].sort_values(by='Feature')
+
+    ### Lime explanation result as table
+    lime_explained = pd.DataFrame(lime_explanation.as_list(), columns=["Representation", "Weight"])
+    lime_df = pd.merge(feat_value_df, lime_explained, on='Weight', how='outer')
+
+    ### Lime explanation result as bar chart
+    lime_explanation.as_pyplot_figure()
+    plt.tight_layout()
+    plt.savefig(os.path.join(var["outputFileDirectory"], "lime_plot.png"))
+    plt.close()
+
+    #  Render feature-value-importance table as graph
+    #  Taking the column width as parameter as long column names are not wrapped in the image
+    render_table_as_image_on_condition(data=feat_value_df, title=f"OBSERVATION: {observation}",
+                                       condition_column_index=lime_df.columns.get_loc("Weight"),
+                                       show_condition_column=False,
+                                       row_height=0.5, font_size=12,
+                                       col_width=lime_feature_graph_width)
+    plt.savefig(os.path.join(var["outputFileDirectory"], "lime_feat_importance.png"))
+    plt.close()
+
+    # Actual vs Predicted
+    y_actual = input_dataset[target_variable][row_index]
+    y_pred = model.predict(X_observation)
+    actual_pred = pd.DataFrame([y_actual, y_pred[0]])
+    actual_pred.index = ["Actual", "Predicted"]
+    actual_pred.columns = ["Values"]
+
+    # Model & Observation details
+    selection = pd.DataFrame([model_user_name, model_name, model_type, observation])
+    selection.index = ["Model", "Model Type", "Model Applied", "Observation (Row)"]
+    selection.columns = ["Details"]
+
+    # Additional Details
+    # Lime explanation score is the R^2 score of the local linear model
+    linear_model_data = {'Value': [round(lime_explanation.score, 5), round(lime_explanation.local_pred[0], 5),
+                                   round(list(lime_explanation.intercept.values())[0], 5)],
+                         'Description': ['R^2 score of the local model', 'Prediction of observation on local model',
+                                         'intercept of local model']}
+
+    details_df = pd.DataFrame(linear_model_data, index=["LIME Explanation Score", "Local Prediction", "intercept"])
+
+    result = {"Selection": selection, "Actual vs Predicted": actual_pred, "LIME Explained": lime_df,
+              "LIME Local Linear Model Details": details_df}
+    return result

@@ -1,0 +1,37 @@
+Training Classification Model:
+from ath.utilities.data_object_utils import validate_and_get_data_object_path, save_data_object_file
+from ath.utilities.train_models_utils import get_classification_model_types, train_multiple_classification_models
+
+def train_classification_models(input_dataset, parameters, var):
+    # PARAMETERS
+    # 1. Target Variable - COLUMN SINGLE-SELECT
+    # 2 onwards. Individual Model Object Names
+
+    import pandas as pd
+
+    X_train = input_dataset.drop(parameters["target_variable"], axis=1)
+    y_train = pd.DataFrame(input_dataset, columns=[parameters["target_variable"]])
+    y_train = y_train.values.reshape(y_train.shape[0], )
+
+    model_types = get_classification_model_types(parameters)
+
+    # Train the classification models
+    models_detail = train_multiple_classification_models(X_train, y_train,model_types)
+
+    # Save the model files
+    for model_detail in models_detail:
+            # Validate data object name and get the path
+            data_object_path = validate_and_get_data_object_path(
+                param=parameters, model_key=model_detail.get("model_key"), relative_path=var['outputFileDirectory'],
+                file_prefix=var['dataObjectPrefix'], file_suffix='.model')
+
+            # Save the data object file
+            if data_object_path:
+                save_data_object_file(model=model_detail.get("model"), model_type='sklearn_classification',
+                                      data_object_path=data_object_path,
+                                      model_name=model_detail.get("model_name"))
+
+
+    result = pd.DataFrame([f"{len(models_detail)} models stored successfully"], columns= ["Result"])
+    return result
+
